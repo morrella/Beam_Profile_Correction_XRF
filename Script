@@ -1,1 +1,510 @@
-# Beam_Profile_Correction_XRF
+#=======================================#
+#     Beam profile correction for XRM   #
+#         Python version 2.7            #
+#        Author: Alex Morrell           #
+#=======================================#
+
+#=======================================#
+#           User Variables              #
+#=======================================#
+step_size = 0.5  #(microns)#
+
+# 0 = no, 1 = yes # (plots)
+Show_wire_scans = 0
+Show_fits = 0
+Show_segmentation = 0
+Circular_Contribution_Image = 0
+Calc_contributions = 0
+
+#=======================================#
+#     Modules (spyder 2.3.8 used)       #
+#=======================================#
+import numpy as np
+import matplotlib.pyplot as plt
+import copy
+import scipy
+from scipy.interpolate import *
+from scipy.optimize import curve_fit
+from scipy.optimize import leastsq
+from mpl_toolkits.mplot3d import Axes3D
+from scipy.integrate import *
+from matplotlib import cm
+from matplotlib.colors import LogNorm
+
+#=======================================#
+#Load Horizontal and Vertical wire scans#
+#=======================================#
+horizontal_X, horizontal_int = np.loadtxt('Horizontal_Profile.txt', unpack= True, usecols = (0, 1), delimiter= '	')
+vertical_X, vertical_int = np.loadtxt('Vertical_Profile.txt', unpack= True, usecols = (0, 1), delimiter= '	')
+
+#======================================#
+# Indexing X for background subtraction# (wire scan background subtraction)
+#======================================#
+horizontal_index= np.linspace(0, (len(horizontal_X)-1), len(horizontal_X))
+vertical_index= np.linspace (0, (len(vertical_X)-1), len(vertical_X))
+
+#================================#
+#Quadratic Background Subtraction#
+#       (of wire scans)          #
+#================================#
+h_index_prepeak, h_index_postpeak, h_int_prepeak, h_int_postpeak =  horizontal_index [0:8], horizontal_index [32:40], horizontal_int [0:8], horizontal_int[32:40]
+h_index, h_int= np.hstack((h_index_prepeak, h_index_postpeak)), np.hstack((h_int_prepeak, h_int_postpeak)) 
+v_index_prepeak, v_index_postpeak, v_int_prepeak, v_int_postpeak= vertical_index [23:35], vertical_index [74:99], vertical_int [23:35], vertical_int [74:99]
+v_index, v_int= np.hstack((v_index_prepeak, v_index_postpeak)), np.hstack((v_int_prepeak, v_int_postpeak))
+
+h_bkg = scipy.polyfit(h_index, h_int, 2)
+v_bkg = scipy.polyfit(v_index, v_int, 2)
+
+h_bkg_values, v_bkg_values= scipy.polyval(h_bkg, horizontal_index), scipy.polyval(v_bkg, vertical_index)
+horizontal_int_bs, vertical_int_bs= (horizontal_int - h_bkg_values), (vertical_int - v_bkg_values)
+h_norm, h_norm_index, v_norm, v_norm_index = horizontal_int_bs [5:39], horizontal_index [5:39], vertical_int_bs [28:80], vertical_index [28:80]
+
+#==============================================#
+# x axis for horizontal and vertical wire scan # 
+#          (um scale starting from 0)          #
+#==============================================#
+hx_norm, vx_norm = copy.deepcopy(horizontal_X), copy.deepcopy(vertical_X)
+hx_norm, vx_norm = hx_norm[5:39], vx_norm[28:80]
+hx_norm, vx_norm = np.sort(hx_norm - np.min(hx_norm)), np.sort(vx_norm - np.min(vx_norm))
+
+#====================#
+# Plot Raw Wire Scans#
+#====================#
+if Show_wire_scans > 0:
+    plt.figure()
+    plt.subplot(121)
+    plt.title('Horizontal Wire Raw data')
+    plt.scatter(hx_norm, h_norm, color='black')
+    plt.subplot(122)
+    plt.title('Vertical Wire Raw data')
+    plt.scatter(vx_norm, v_norm)
+
+#====================================#
+#Gaussian Fit functions of wire scans#
+#====================================#
+def gaus (x, a, b, c):
+    return a* np.exp(-(x-b)**2/(2*c**2))
+    
+def quadmodal (x, a, b, c, a2, b2, c2, a3, b3, c3, a4, b4, c4):
+    return gaus (x, a, b, c)+ gaus(x, a2, b2, c2)+ gaus(x, a3, b3, c3) + gaus(x, a4, b4, c4)
+
+hx_fit, vx_fit = np.arange(0, np.max(hx_norm), hx_norm[1]/10), np.arange(0, np.max(vx_norm), vx_norm[1]/ 10)
+
+horizontal_expected= (12.3, 3.1, 0.8, 29, 2.55, 1, 48, 2.85, 1, 3.7, 1.68, 1.1) #these will need to be altered depending on your wire scan#
+p_h, extras= curve_fit(quadmodal, hx_norm, h_norm, horizontal_expected)         #each Gaussian has 3 numbers (x,y,z) (height, position (X), width)
+
+vertical_expected= (5, 1.2, 2, 62, 3.5, 1.5, 40, 2.5, 1, 20, 2.5, 2)
+p_v, extras= curve_fit(quadmodal, vx_norm, v_norm, vertical_expected)
+
+#=========#
+#Plot Fits#
+#=========#
+if Show_fits >0:
+    #Plot Data and fits#
+    plt.figure()
+    plt.subplot(121)
+    plt.title('Horizontal Fit')
+    plt.scatter(hx_norm, h_norm, color= 'black', s= 10,)
+    plt.plot (hx_fit, quadmodal(hx_fit, p_h[0], p_h[1], p_h[2], p_h[3], p_h[4], p_h[5], p_h[6], p_h[7], p_h[8], p_h[9], p_h[10], p_h[11]), 'k')
+    #plt.plot(hx_fit, gaus(hx_fit, p_h[0], p_h[1], p_h[2]), 'r--')
+    plt.plot(hx_fit, gaus(hx_fit, p_h[3], p_h[4], p_h[5]), 'b--')
+    plt.plot(hx_fit, gaus(hx_fit, p_h[6], p_h[7], p_h[8]), 'r--')
+    ##plt.plot(hx_fit, gaus(hx_fit, p_h[9], p_h[10], p_h[11]), 'b--')
+
+    plt.subplot(122)
+    plt.title('Vertical scan')
+    plt.scatter(vx_norm, v_norm, color= 'black', s= 10,)
+    plt.plot (vx_fit, quadmodal(vx_fit, p_v[0], p_v[1], p_v[2], p_v[3], p_v[4], p_v[5], p_v[6], p_v[7], p_v[8], p_v[9], p_v[10], p_v[11]))
+    plt.plot(vx_fit, gaus(vx_fit, p_v[0], p_v[1], p_v[2]), 'r--')
+    plt.plot(vx_fit, gaus(vx_fit, p_v[3], p_v[4], p_v[5]), 'b--')
+    plt.plot(vx_fit, gaus(vx_fit, p_v[6], p_v[7], p_v[8]), 'y--')
+    plt.plot(vx_fit, gaus(vx_fit, p_v[9], p_v[10], p_v[11]), 'g--')
+
+#===========================#
+#Making Fit as seperate data#
+#===========================#
+h_fit=(quadmodal(hx_fit, p_h[0], p_h[1], p_h[2], p_h[3], p_h[4], p_h[5], p_h[6], p_h[7], p_h[8], p_h[9], p_h[10], p_h[11]))
+v_fit=(quadmodal(vx_fit, p_v[0], p_v[1], p_v[2], p_v[3], p_v[4], p_v[5], p_v[6], p_v[7], p_v[8], p_v[9], p_v[10], p_v[11]))
+
+#===================================================#
+#Define New f(X)'s for Horizontal and Vertical Scans#
+#===================================================#
+def horizontal_function(x):
+    return (p_h[0]* np.exp(-(x-p_h[1])**2/(2*p_h[2]**2))) + (p_h[3]* np.exp(-(x-p_h[4])**2/(2*p_h[5]**2))) + (p_h[6]* np.exp(-(x-p_h[7])**2/(2*p_h[8]**2))) + (p_h[9]* np.exp(-(x-p_h[10])**2/(2*p_h[11]**2)))
+
+def vertical_function(x):
+    return (p_v[0]* np.exp(-(x-p_v[1])**2/(2*p_v[2]**2))) + (p_v[3]* np.exp(-(x-p_v[4])**2/(2*p_v[5]**2))) + (p_v[6]* np.exp(-(x-p_v[7])**2/(2*p_v[8]**2))) + (p_v[9]* np.exp(-(x-p_v[10])**2/(2*p_v[11]**2)))
+
+#=========================# 
+# Segmentation of the Fit # 
+#=========================#
+#The segmentation is based on 4 pixel either side of the central pixel (up, down, left and right)#
+#This will need to be altered if there is signal in the wire scan further than 4 pixels away from the central region#
+
+hy_max, vy_max = np.max(h_fit), np.max(v_fit)
+hx_max, vx_max = 0 , 0
+
+iteration = range(0, len(hx_fit))
+for i in iteration:
+    if h_fit[i] == hy_max:
+        hx_max = i
+        break
+iteration = range(0, len(vx_fit))
+for i in iteration:
+    if v_fit[i] == vy_max:
+        vx_max = i
+        break    
+
+h_mid, h_ls1, h_ls2, h_ls3, h_ls4, h_ls5 = hx_fit[hx_max], hx_fit[hx_max]- (step_size/2), hx_fit[hx_max] - (3*step_size/2), hx_fit[hx_max] - (5*step_size/2), hx_fit[hx_max] - (7*step_size/2), hx_fit[hx_max] - (9*step_size/2) 
+h_rs1, h_rs2, h_rs3, h_rs4, h_rs5 = hx_fit[hx_max]+ (step_size/2), hx_fit[hx_max] + (3*step_size/2), hx_fit[hx_max] + (5*step_size/2), hx_fit[hx_max] + (7*step_size/2), hx_fit[hx_max] + (9*step_size/2)
+
+v_mid, v_ls1, v_ls2, v_ls3, v_ls4, v_ls5 = vx_fit[vx_max], vx_fit[vx_max]- (step_size/2), vx_fit[vx_max] - (3*step_size/2), vx_fit[vx_max] - (5*step_size/2), vx_fit[vx_max] - (7*step_size/2), vx_fit[vx_max] - (9*step_size/2) 
+v_rs1, v_rs2, v_rs3, v_rs4, v_rs5 = vx_fit[vx_max]+ (step_size/2), vx_fit[vx_max] + (3*step_size/2), vx_fit[vx_max] + (5*step_size/2), vx_fit[vx_max] + (7*step_size/2), vx_fit[vx_max] + (9*step_size/2)
+ 
+if Show_segmentation > 0:
+    plt.figure()
+    plt.title('Horizontal Segments')
+    plt.plot (hx_fit, h_fit, color= 'black')
+    plt.plot((h_ls1, h_ls1),(0, 80), color='red')
+    plt.plot((h_ls2, h_ls2),(0, 80), color='blue')
+    plt.plot((h_ls3, h_ls3),(0, 80), color='green')
+    plt.plot((h_ls4, h_ls4),(0, 80), color='purple')
+    plt.plot((h_ls5, h_ls5),(0, 80), color='yellow')
+    plt.plot((h_rs1, h_rs1),(0, 80), color='red')
+    plt.plot((h_rs2, h_rs2),(0, 80), color='blue')
+    plt.plot((h_rs3, h_rs3),(0, 80), color='green')
+    plt.plot((h_rs4, h_rs4),(0, 80), color='purple')
+    plt.plot((h_rs5, h_rs5),(0, 80), color='yellow')
+    
+    plt.figure()
+    plt.title('Horizontal Segments')
+    plt.plot (vx_fit, v_fit, color= 'black')
+    plt.plot((v_ls1, v_ls1),(0, 300), color='red')
+    plt.plot((v_ls2, v_ls2),(0, 300), color='blue')
+    plt.plot((v_ls3, v_ls3),(0, 300), color='green')
+    plt.plot((v_ls4, v_ls4),(0, 300), color='purple')
+    plt.plot((v_ls5, v_ls5),(0, 300), color='yellow')
+    plt.plot((v_rs1, v_rs1),(0, 300), color='red')
+    plt.plot((v_rs2, v_rs2),(0, 300), color='blue')
+    plt.plot((v_rs3, v_rs3),(0, 300), color='green')
+    plt.plot((v_rs4, v_rs4),(0, 300), color='purple')
+    plt.plot((v_rs5, v_rs5),(0, 300), color='yellow')
+
+
+#=======================#    
+# Integrate the segments#
+#=======================#
+H_INT_0 = quad(horizontal_function, h_ls1, h_rs1)
+H_INT_R1, H_INT_R2, H_INT_R3, H_INT_R4= quad(horizontal_function, h_rs1, h_rs2), quad(horizontal_function, h_rs2, h_rs3), quad(horizontal_function, h_rs3, h_rs4), quad(horizontal_function, h_rs4, h_rs5)
+H_INT_L1, H_INT_L2, H_INT_L3, H_INT_L4= quad(horizontal_function, h_ls2, h_ls1), quad(horizontal_function, h_ls3, h_ls2), quad(horizontal_function, h_ls4, h_ls3), quad(horizontal_function, h_ls5, h_ls4)
+H0, HL1, HL2, HL3, HL4, HR1, HR2, HR3, HR4 = H_INT_0[0]/ H_INT_0[0], H_INT_L1[0]/ H_INT_0[0], H_INT_L2[0]/ H_INT_0[0], H_INT_L3[0]/ H_INT_0[0], H_INT_L4[0]/ H_INT_0[0], H_INT_R1[0]/ H_INT_0[0], H_INT_R2[0]/ H_INT_0[0], H_INT_R3[0]/ H_INT_0[0], H_INT_R4[0]/ H_INT_0[0]
+
+V_INT_0 = quad(vertical_function, v_ls1, v_rs1)
+V_INT_R1, V_INT_R2, V_INT_R3, V_INT_R4= (quad(vertical_function, v_rs1, v_rs2)), (quad(vertical_function, v_rs2, v_rs3)), (quad(vertical_function, v_rs3, v_rs4)), (quad(vertical_function, v_rs4, v_rs5))
+V_INT_L1, V_INT_L2, V_INT_L3, V_INT_L4= (quad(vertical_function, v_ls2, v_ls1)), (quad(vertical_function, v_ls3, v_ls2)), (quad(vertical_function, v_ls4, v_ls3)), (quad(vertical_function, v_ls5, v_ls4))
+V0, VL1, VL2, VL3, VL4, VR1, VR2, VR3, VR4 = V_INT_0[0]/ V_INT_0[0], V_INT_L1[0]/ V_INT_0[0], V_INT_L2[0]/ V_INT_0[0], V_INT_L3[0]/ V_INT_0[0], V_INT_L4[0]/ V_INT_0[0], V_INT_R1[0]/ V_INT_0[0], V_INT_R2[0]/ V_INT_0[0], V_INT_R3[0]/ V_INT_0[0], V_INT_R4[0]/ V_INT_0[0] 
+
+#====================================#
+# Calculating Circular contributions #
+#====================================#
+#the contributions are calculated based on the step size being 0.5um#
+#hence the area of a pixel is 0.5*0.5 = 0.25#
+
+def circle1(x):
+    return np.sqrt(-x**2 + 0.25**2)
+def circle2(x):
+    return np.sqrt(-x**2 + 0.75**2)
+def circle3(x):
+    return np.sqrt(-x**2 + 1.25**2)
+def circle4(x):
+    return np.sqrt(-x**2 + 1.75**2)
+def circle5(x):
+    return np.sqrt(-x**2 + 2.25**2)
+    
+circ1_x, circ2_x, circ3_x, circ4_x, circ5_x= np.linspace(-0.25, 0.25, 500), np.linspace(-0.75, 0.75, 500), np.linspace(-1.25, 1.25, 500), np.linspace(-1.75, 1.75, 500), np.linspace(-2.25, 2.25, 500)
+circ1_y, circ2_y, circ3_y, circ4_y, circ5_y= circle1(circ1_x), circle2(circ2_x), circle3(circ3_x), circle4(circ4_x), circle5(circ5_x)
+
+
+#Areas in Pixels#
+a= (quad(circle2, 0.25, 0.75))[0] - (.25/2)
+b= .25- a
+c= (quad(circle3, 0.25, 0.75))[0] - .25 - (.25/2)
+d= .25 - c
+e= (quad(circle3, 0.75, 1.25))[0] - c - (.25/2)
+f= .25 - e
+g= c
+h= d
+i= (quad(circle4, .25, .75))[0] - (2*.25) - (.25/2)
+j= .25 - i
+k= (quad(circle4, .75, 1.25))[0] - (2*.25) - (.25/2)
+l= .25 - k
+m= k
+n= l
+o= i
+p= j
+q= (quad(circle5, .25, .75))[0] - (3*.25) - (.25/2)
+r= (quad(circle5, .75, 1.25))[0] - (3*.25) - (.25/2)
+t= r
+u= q
+s= (quad(circle5, 1.25, 1.75))[0] - ((quad(circle5, 1.75, 2.25)[0])- t - u - (.25/2)) - (2*.25) - (.25/2)
+
+#=============#
+#Contributions#
+#=============#
+Contributions= np.loadtxt('Contributions_calculated.csv', delimiter=',')
+
+
+#The calculator below can be used to calculate the contributions within the quadrant assumping a circular profile#
+#these values were inputted into a text file and loaded as 'Contributions'#
+'''
+x, y= 1,1  #pixel number (x,y)#
+wq = ('HR','VL') #which quadrant? (HR VL) or (HL VL) or (HL VR) or (HL VR)
+
+a1, a2= 0,0                         #areas based on circular integration- given correct value in if statements below#
+hd1, hd2, vd1, vd2= 0, 0, 0, 0      #horizontal and vertical distance constants- given correct value in if statments below#
+if x==1:
+    if y==1:
+        a1, a2 = a, b
+        hd1, vd1, hd2, vd2 = .5, .5 , .5 , .5
+    elif y==2:
+        a1 , a2 = c,d
+        hd1, vd1, hd2, vd2 = 1.0/3, 2.0/3 , np.sqrt(2)/ (np.sqrt(2)+np.sqrt(5)), np.sqrt(5)/ (np.sqrt(2)+np.sqrt(5))
+    elif y==3:
+        a1, a2 = g,h
+        hd1, vd1, hd2, vd2 = 1.0/4, 3.0/4, np.sqrt(2)/ (np.sqrt(2)+np.sqrt(13)), np.sqrt(13)/ (np.sqrt(2)+np.sqrt(13))
+    elif y==4:
+        a1, a2 = k, 0
+        hd1, vd1, hd2, vd2 = 1.0/5 , 4.0/5, 0, 0
+elif x==2:
+    if y==1:
+        a1, a2 = c, d
+        hd1, vd1, hd2, vd2 = 2.0/3, 1.0/3, np.sqrt(5)/ (np.sqrt(2)+np.sqrt(5)), np.sqrt(2)/ (np.sqrt(2)+np.sqrt(5))
+    elif y==2:
+        a1 , a2 = e,f
+        hd1, vd1, hd2, vd2 = .5, .5 , .5 , .5
+    elif y==3:
+        a1, a2 = i,j
+        hd1, vd1, hd2, vd2 = 2.0/5, 3.0/5, np.sqrt(5)/ (np.sqrt(5)+np.sqrt(13)), np.sqrt(13)/ (np.sqrt(5)+np.sqrt(13))
+    elif y==4:
+        a1, a2 = l, 0  
+        hd1, vd1, hd2, vd2 = 1.0/3, 2.0/3, 0, 0
+elif x==3:
+    if y==1:
+        a1, a2 = g, h
+        hd1, vd1, hd2, vd2 = 3.0/4, 1.0/4, np.sqrt(13)/ (np.sqrt(2)+np.sqrt(13)), np.sqrt(2)/ (np.sqrt(2)+np.sqrt(13))
+    elif y==2:
+        a1 , a2 = i,j
+        hd1, vd1, hd2, vd2 = 3.0/5, 2.0/5, np.sqrt(13)/ (np.sqrt(5)+np.sqrt(13)), np.sqrt(5)/ (np.sqrt(5)+np.sqrt(13))
+    elif y==3:
+        a1, a2 = m,0
+        hd1, vd1, hd2, vd2 = .5, .5 , .5 , .5
+    elif y==4:
+        a1, a2 = 0, 0
+        hd1, vd1, hd2, vd2 =3.0/7, 4.0/7, 0,0
+elif x==4:
+    if y==1:
+        a1, a2 = k, 0
+        hd1, vd1, hd2, vd2 = 4.0/5, 2.0/5, 0, 0
+    elif y==2:
+        a1 , a2 = l,0
+        hd1, vd1, hd2, vd2 = 2.0/3, 1.0/3, 0,0
+    elif y==3:
+        a1, a2 = 0,0
+        hd1, vd1, hd2, vd2 = 4.0/7, 3.0/7, 0 ,0 
+    elif y==4:
+        a1, a2 = 0, 0
+        hd1, vd1, hd2, vd2 = .5, .5 , .5 , .5
+
+h1, h2, v1, v2 = eval(wq[0] + str(x)), eval(wq[0]+ str(x+1)), eval(wq[1]+ str(y)), eval(wq[1] +str(y+1))
+
+contribution_pixel = (((h1 * hd1) + (v1*vd1))*(a1*4)) + (((h2 * hd2) + (v2*vd2))*(a2*4))
+
+print('Pixel ('+str(x)+','+str(y)+') = '+str(contribution_pixel)+'.')
+'''
+
+
+if Circular_Contribution_Image >0:
+    fig = plt.figure()
+    ax = fig.add_subplot(121)
+    ax.set_aspect ('equal')
+    plt.plot(circ1_x, circ1_y, 'r')
+    plt.plot(circ2_x, circ2_y, 'b')
+    plt.plot(circ3_x, circ3_y, 'g')
+    plt.plot(circ4_x, circ4_y, 'm')
+    plt.plot(circ5_x, circ5_y, 'y')
+    
+    plt.plot(circ1_x, -circ1_y, 'r')
+    plt.plot(circ2_x, -circ2_y, 'b')
+    plt.plot(circ3_x, -circ3_y, 'g')
+    plt.plot(circ4_x, -circ4_y, 'm')
+    plt.plot(circ5_x, -circ5_y, 'y')
+
+    plt.plot((0.25, 0.25),(-2.25, 2.25), 'k--')
+    plt.plot((0.75, 0.75),(-2.25, 2.25), 'k--')
+    plt.plot((1.25, 1.25),(-2.25, 2.25), 'k--')
+    plt.plot((1.75,1.75),(-2.25, 2.25), 'k--')
+    plt.plot((2.25,2.25),(-2.25, 2.25), 'k--')
+    
+    plt.plot((-0.25, -0.25),(-2.25, 2.25), 'k--')
+    plt.plot((-0.75, -0.75),(-2.25, 2.25), 'k--')
+    plt.plot((-1.25, -1.25),(-2.25, 2.25), 'k--')
+    plt.plot((-1.75,-1.75),(-2.25, 2.25), 'k--')
+    plt.plot((-2.25,-2.25),(-2.25, 2.25), 'k--')
+
+    plt.plot((-2.25, 2.25), (0.25, 0.25), 'k--')
+    plt.plot((-2.25, 2.25),(0.75, 0.75), 'k--')
+    plt.plot((-2.25, 2.25),(1.25, 1.25), 'k--')
+    plt.plot((-2.25, 2.25),(1.75,1.75), 'k--')
+    plt.plot((-2.25, 2.25),(2.25,2.25), 'k--')
+
+    plt.plot((-2.25, 2.25), (-0.25, -0.25), 'k--')
+    plt.plot((-2.25, 2.25),(-0.75, -0.75), 'k--')
+    plt.plot((-2.25, 2.25), (-1.25, -1.25), 'k--')
+    plt.plot((-2.25, 2.25),(-1.75,-1.75), 'k--')
+    plt.plot((-2.25, 2.25),(-2.25,-2.25), 'k--')
+    
+    plt.subplot(122)
+    plt.imshow(Contributions, interpolation='Nearest')
+    
+#===============#
+# Load XRF Data #
+#===============#
+y, x, P, S, Cl, K, Ca, Ti= np.loadtxt('Ti_M2_Spleen_HiRes1.csv', unpack= True, usecols= (0, 1, 8, 10, 12, 14, 16, 18), delimiter= ';', skiprows= 1)
+xmax, ymax= np.max(x), np.max(y)
+
+#reshape in 2d array#
+P_mg, S_mg, Cl_mg, K_mg, Ca_mg, Ti_mg= np.reshape(P, (ymax+1, xmax+1)), np.reshape(S, (ymax+1, xmax+1)), np.reshape(Cl, (ymax+1, xmax+1)), np.reshape(K, (ymax+1, xmax+1)), np.reshape(Ca, (ymax+1, xmax+1)), np.reshape(Ti, (ymax+1, xmax+1))
+#remove top portion of map due to flux drop#
+P_mg, S_mg, Cl_mg, K_mg, Ca_mg, Ti_mg= P_mg[32:,:], S_mg[32:,:], Cl_mg[32:,:], K_mg[32:,:], Ca_mg[32:,:], Ti_mg[32:,:]
+
+#==========================#
+# Preparing Titanium Masks #
+#==========================#
+Ti_BPN= copy.deepcopy(Ti_mg)
+Ti_Mask= copy.deepcopy(Ti_mg)
+Ti_Mask_before= copy.deepcopy(Ti_Mask)
+
+#Removing 8 Pixel Border and Zero Values# (cannot correct values within this region because not enough information is known around these values) 
+Ti_Mask[0:8, :], Ti_Mask[160: 168, :], Ti_Mask[:, 0:8], Ti_Mask[:, 184:192]= 10000 , 10000 , 10000 , 10000
+
+#Iteration Mask#
+Contributions_Mask= copy.deepcopy(Contributions)
+Contributions_Mask[4,4]= 0
+
+#===============================================#
+# Simple Background Subtraction to remove noise #
+#===============================================#
+iteration_i = range(8, 184) #first 8 pixels and last 8 pixels cannot be corrected#
+iteration_j = range(8, 160)
+
+for i in iteration_i:
+    for j in iteration_j:
+        if Ti_mg[j,i] < 28:     #value chosen which is below any artefact magnitudes or real signal on the maps#
+            Ti_mg[j,i] = 0
+            Ti_BPN[j,i] = 0
+            Ti_Mask[j,i] = 10000    #mask set to a higher value then the max value within the map, meaning when doing np.min(Ti_mask) these values will not be selected#
+           
+
+iteration_number = 0
+
+while iteration_number <> 1275: #number of pixels above 0#
+    j,i= (np.where( Ti_Mask== np.min(Ti_Mask)))[0], (np.where(Ti_Mask == np.min(Ti_Mask)))[1] #finds the smallest value in the map#
+    j, i= j[0], i[0] #incase there are two identical values#
+
+    def BPN(x):
+        return (x[4,4] - np.sum((x * Contributions_Mask)))/ Contributions[4,4]
+    
+#68 2d arrays are defined centering around the pixel being corrected#
+#The position of the arrays can be seen in the image file within the repository box#
+#Each number is corrected from 1 --> 68#
+#Once a peripheral circle (1-24)(25-44)(45-60)(61-68) has been corrected, the corrected values are fed into subsequent calculations#
+
+    mg = copy.deepcopy(Ti_BPN[j-8:j+9, i-8:i+9])
+    mg1, mg2, mg3, mg4, mg5 = BPN(mg[0:9, 4:13]), BPN(mg[0:9, 5:14]), BPN(mg[0:9, 6:15]), BPN(mg[1:10, 7:16]), BPN(mg[2:11, 8:17]) 
+    mg6, mg7, mg8, mg9, mg10 = BPN(mg[3:12, 8:17]), BPN(mg[4:13, 8:17]), BPN(mg[5:14, 8:17]), BPN(mg[6:15, 8:17]), BPN(mg[7:16, 7:16])
+    mg11, mg12, mg13, mg14, mg15 = BPN(mg[8:17, 6:15]), BPN(mg[8:17, 5:14]), BPN(mg[8:17, 4:13]), BPN(mg[8:17, 3:12]), BPN(mg[8:17, 2:11])
+    mg16, mg17, mg18, mg19, mg20 = BPN(mg[7:16, 1:10]), BPN(mg[6:15, 0:9]), BPN(mg[5:14, 0:9]), BPN(mg[4:13, 0:9]), BPN(mg[3:12, 0:9])
+    mg21, mg22, mg23, mg24 = BPN(mg[2:11, 0:9]), BPN(mg[1:10, 1:10]), BPN(mg[0:9, 2:11]), BPN(mg[0:9, 3:12])
+    
+    
+    mga= copy.deepcopy(mg[1:16, 1:16])
+    mga[3, 5:10] = (mg23, mg24, mg1, mg2, mg3)
+    mga[5:10, 3] = (mg21, mg20, mg19, mg18, mg17)
+    mga[11, 5:10] = (mg15, mg14, mg13, mg12, mg11)
+    mga[5:10, 11] = (mg5, mg6, mg7, mg8, mg9)
+    mga[5:5], mga[5,11], mga[11,5], mga[11,11] = mg22, mg4, mg16, mg10 
+    
+    for l in range (len(mga)):
+        for m in range (len(mga)):
+            if mga[m,l] < 0:
+                mga[m,l] = 0
+                
+    mg25, mg26, mg27, mg28, mg29= BPN(mga[0:9, 3:12]), BPN(mga[0:9, 4:13]), BPN(mga[0:9, 5:14]), BPN(mga[1:10, 6:15]), BPN(mga[2:11, 6:15])
+    mg30, mg31, mg32, mg33, mg34 = BPN(mga[3:12, 6:15]), BPN(mga[4:13, 6:15]), BPN(mga[5:14, 6:15]), BPN(mga[6:15, 5:14]), BPN(mga[6:15, 4:13])
+    mg35, mg36, mg37, mg38, mg39 = BPN(mga[6:15, 3:12]), BPN(mga[6:15, 2:11]), BPN(mga[6:15, 1:10]), BPN(mga[5:14, 0:9]), BPN(mga[4:13, 0:9])
+    mg40, mg41, mg42, mg43, mg44 = BPN(mga[3:12, 0:9]), BPN(mga[2:11, 0:9]), BPN(mga[1:10, 0:9]), BPN(mga[0:9, 1:10]), BPN(mga[0:9, 2:11]),
+    
+    mgb= copy.deepcopy(mga[1:14, 1:14])
+    mgb[3, 4:9] = (mg43, mg44, mg25, mg26, mg27)
+    mgb[9, 4:9]= (mg37, mg36, mg35, mg34, mg33)
+    mgb[4:9, 3] = (mg42, mg41, mg40, mg39, mg38)
+    mgb[4:9, 9]= (mg28, mg29, mg30, mg31, mg32)
+    
+    for l in range (len(mgb)):
+        for m in range (len(mgb)):
+            if mgb[m,l] < 0:
+                mgb[m,l] = 0
+    
+    mg45, mg46, mg47, mg48 = BPN(mgb[0:9, 2:11]), BPN(mgb[0:9, 3:12]), BPN(mgb[0:9, 4:13]), BPN(mgb[1:10, 4:13])
+    mg49, mg50, mg51, mg52 = BPN(mgb[2:11, 4:13]), BPN(mgb[3:12, 4:13]), BPN(mgb[4:13, 4:13]), BPN(mgb[4:13, 3:12])
+    mg53, mg54, mg55, mg56 = BPN(mgb[4:13, 2:11]), BPN(mgb[4:13, 1:10]), BPN(mgb[4:13, 0:9]), BPN(mgb[3:12, 0:9])
+    mg57, mg58, mg59, mg60 = BPN(mgb[2:11, 0:9]), BPN(mgb[1:10, 0:9]), BPN(mgb[0:9, 0:9]), BPN(mgb[0:9, 1:10]),
+    
+    mgc = copy.deepcopy(mgb[1:12, 1:12])
+    mgc[3,3:8] = mg59, mg60, mg45, mg46, mg47 
+    mgc[4:7,7] = mg48, mg49, mg50
+    mgc[7,3:8]= mg55, mg54, mg53, mg52, mg51
+    mgc[4:7,3]= mg58, mg57, mg56
+    
+    for l in range (len(mgc)):
+        for m in range (len(mgc)):
+            if mgc[m,l] < 0:
+                mgc[m,l] = 0
+                
+                
+    mg61, mg62, mg63, mg64 = BPN(mgc[0:9, 1:10]), BPN(mgc[0:9,2:11]), BPN(mgc[1:10,2:11]), BPN(mgc[2:11,2:11])
+    mg65, mg66, mg67, mg68 = BPN(mgc[2:11,1:10]), BPN(mgc[2:11,0:9]), BPN(mgc[1:10,0:9]), BPN(mgc[0:9,0:9])
+    
+    mgd = copy.deepcopy(mgc[1:10, 1:10])
+    mgd[3, 3:6]= (mg68, mg61, mg62)
+    mgd[4,3], mgd[4,5]= mg67, mg63
+    mgd[5, 3:6]= (mg66, mg65, mg64)
+    
+    for l in range (len(mgd)):
+        for m in range (len(mgd)):
+            if mgd[m,l] < 0:
+                mgd[m,l] = 0
+                
+    final_pixel = BPN(mgd)
+    
+    if final_pixel < 0:
+        final_pixel = 0
+    
+    Ti_BPN[j,i] = final_pixel
+    Ti_Mask[j,i] = 2000
+    iteration_number = iteration_number + 1
+    print('Iteration Number = ' +str(iteration_number) + '/ 1275')
+
+
+
+#=======#
+#Figures#
+#=======#
+plt.figure()
+plt.title('BPN')
+plt.imshow(Ti_BPN[8:160,8:184], interpolation='nearest', vmin=0, vmax= 500,)
+plt.colorbar()
+
+plt.figure()
+plt.title('Original')
+plt.imshow(Ti_mg[8:160,8:184], interpolation= 'nearest', vmin=0, vmax= 500,)
